@@ -29,7 +29,7 @@
     <Authors>zms9110750</Authors>
     <!-- 基线版本：CI 发预览时拿它对比"源上已发布的这个版本"，据此算预览号。
          正式版发布后要手动把它往前推进（csharp-sdk 也是人工 bump 这一步）。 -->
-    <Version>0.1.1</Version>
+    <Version>0.1.1-ci.2</Version>
     <RepositoryUrl>https://github.com/$(Authors)/TestFlow</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>

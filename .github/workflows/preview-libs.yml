@@ -120,9 +120,10 @@ jobs:
 
           # 基线版本 = 项目里 <Version> 写的那个（剥掉 -pre / +meta）
           # 注意：-getProperty 只查一个属性时输出的是裸值，不是 JSON，别去 ConvertFrom-Json
-          $base = (dotnet msbuild $proj -getProperty:Version | Out-String).Trim()
-          if ($base -notmatch '^\d+\.\d+') { throw "拿不到基线版本，msbuild 输出：$base" }
-          $base = $base.Split('-')[0].Split('+')[0]
+          $cmp  = (dotnet msbuild $proj -getProperty:Version | Out-String).Trim()
+          if ($cmp -notmatch '^\d+\.\d+') { throw "拿不到基线版本，msbuild 输出：$cmp" }
+          # $cmp = 对比用的基线版本（可含 -pre，如 0.1.1-ci.2）；$base = 它的三段形式，只决定涨哪一位
+          $base = $cmp.Split('-')[0].Split('+')[0]
           $seg   = $base.Split('.')
           $major = [int]$seg[0]
           $minor = [int]$seg[1]
@@ -144,7 +145,7 @@ jobs:
           $log1 = (dotnet pack $proj -c Release -o "$probe/a" `
                     -p:Version="$base-ci.$n" `
                     -p:EnablePackageValidation=true `
-                    -p:PackageValidationBaselineVersion="$base" 2>&1 | Out-String)
+                    -p:PackageValidationBaselineVersion="$cmp" 2>&1 | Out-String)
           Write-Host "===== 默认模式 (exit $LASTEXITCODE) ====="
           Write-Host $log1
           $defCodes = & $grab $log1
@@ -157,7 +158,7 @@ jobs:
             $log2 = (dotnet pack $proj -c Release -o "$probe/b" `
                       -p:Version="$base-ci.$n" `
                       -p:EnablePackageValidation=true `
-                      -p:PackageValidationBaselineVersion="$base" `
+                      -p:PackageValidationBaselineVersion="$cmp" `
                       -p:EnableStrictModeForBaselineValidation=true 2>&1 | Out-String)
             Write-Host "===== 严格模式 (exit $LASTEXITCODE) ====="
             Write-Host $log2

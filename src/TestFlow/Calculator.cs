@@ -6,16 +6,17 @@ namespace zms9110750.TestFlow;
 /// </summary>
 public static class Calculator
 {
-    /// <summary>把两个整数相加。</summary>
+    /// <summary>把三个整数相加（改签名，相对基线 0.1.1-ci.2 是破坏性更新）。</summary>
     /// <param name="a">第一个加数。</param>
     /// <param name="b">第二个加数。</param>
-    /// <returns>两个数之和。</returns>
-    public static int Add(int a, int b)
+    /// <param name="c">第三个加数。</param>
+    /// <returns>三个数之和。</returns>
+    public static int Add(int a, int b, int c)
     {
-        return a + b;
+        return a + b + c;
     }
 
-    /// <summary>把两个整数相减（本次新增，用于验证 additive 分支）。</summary>
+    /// <summary>把两个整数相减。</summary>
     /// <param name="a">被减数。</param>
     /// <param name="b">减数。</param>
     /// <returns>两个数之差。</returns>
