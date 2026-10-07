@@ -42,8 +42,9 @@ jobs:
             $list = @()
             $cands = @(Get-ChildItem src, samples -Recurse -Filter *.csproj -ErrorAction SilentlyContinue)
             foreach ($p in $cands) {
-              $o = dotnet msbuild $p.FullName -getProperty:OutputType | ConvertFrom-Json
-              if ($o.Properties.OutputType -in @('Exe', 'WinExe')) {
+              # 单属性查询返回的是裸值，不是 JSON
+              $o = (dotnet msbuild $p.FullName -getProperty:OutputType | Out-String).Trim()
+              if ($o -in @('Exe', 'WinExe')) {
                 $list += [IO.Path]::GetRelativePath($root, $p.FullName).Replace('\', '/')
               }
             }

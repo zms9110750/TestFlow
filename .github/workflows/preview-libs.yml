@@ -100,8 +100,14 @@ jobs:
           $proj = "${{ matrix.project }}"
           $n    = "${{ github.run_number }}"
 
+          # GH Actions 的 pwsh 默认 $ErrorActionPreference=stop，会把 dotnet 写到 stderr 的
+          # 文本当成终止错误，而下面正是靠这些文本读 CP 码 —— 先放宽
+          $ErrorActionPreference = 'Continue'
+
           # 基线版本 = 项目里 <Version> 写的那个（剥掉 -pre / +meta）
-          $base = (dotnet msbuild $proj -getProperty:Version | ConvertFrom-Json).Properties.Version
+          # 注意：-getProperty 只查一个属性时输出的是裸值，不是 JSON，别去 ConvertFrom-Json
+          $base = (dotnet msbuild $proj -getProperty:Version | Out-String).Trim()
+          if ($base -notmatch '^\d+\.\d+') { throw "拿不到基线版本，msbuild 输出：$base" }
           $base = $base.Split('-')[0].Split('+')[0]
           $seg   = $base.Split('.')
           $major = [int]$seg[0]
@@ -158,6 +164,9 @@ jobs:
           $preview = "$core-ci.$n"
           Write-Host "API 变化=$kind  →  预览版本=$preview"
           "preview=$preview" >> $env:GITHUB_OUTPUT
+
+          # 探测用的 pack 本来就是"失败即信号"，别让 GH 拿它的退出码判定这一步
+          exit 0
 
       - name: 打包预览版
         shell: pwsh

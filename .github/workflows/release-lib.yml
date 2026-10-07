@@ -74,7 +74,8 @@ jobs:
             $v = $in
           } else {
             # 留空就用项目里 <Version> 写的那个
-            $v = (dotnet msbuild "${{ matrix.project }}" -getProperty:Version | ConvertFrom-Json).Properties.Version
+            # 注意：-getProperty 只查一个属性时输出的是裸值，不是 JSON
+            $v = (dotnet msbuild "${{ matrix.project }}" -getProperty:Version | Out-String).Trim()
           }
           Write-Host "版本 = $v"
           "version=$v" >> $env:GITHUB_OUTPUT
