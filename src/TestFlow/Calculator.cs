@@ -14,4 +14,13 @@ public static class Calculator
     {
         return a + b;
     }
+
+    /// <summary>把两个整数相减（本次新增，用于验证 additive 分支）。</summary>
+    /// <param name="a">被减数。</param>
+    /// <param name="b">减数。</param>
+    /// <returns>两个数之差。</returns>
+    public static int Subtract(int a, int b)
+    {
+        return a - b;
+    }
 }
