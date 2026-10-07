@@ -97,8 +97,11 @@ jobs:
         id: ver
         shell: pwsh
         run: |
-          $proj = "${{ matrix.project }}"
-          $n    = "${{ github.run_number }}"
+          $proj  = "${{ matrix.project }}"
+          $n     = "${{ github.run_number }}"
+          # 年月（UTC）—— 和 ci 序号构成"双号"后缀：build.2026.10.ci.2
+          # 这样即使换了 workflow 文件导致 run_number 归零，年月那一截仍在往前走
+          $stamp = (Get-Date).ToUniversalTime().ToString('yyyy.MM')
 
           # GH Actions 的 pwsh 默认 $ErrorActionPreference=stop，会把 dotnet 写到 stderr 的
           # 文本当成终止错误，而下面正是靠这些文本读 CP 码 —— 先放宽
@@ -161,7 +164,7 @@ jobs:
             'additive' { if ($major -eq 0) { "$major.$minor.$($patch + 1)" } else { "$major.$($minor + 1).0" } }
             default    { "$major.$minor.$($patch + 1)" }
           }
-          $preview = "$core-ci.$n"
+          $preview = "$core-build.$stamp.ci.$n"
           Write-Host "API 变化=$kind  →  预览版本=$preview"
           "preview=$preview" >> $env:GITHUB_OUTPUT
 
