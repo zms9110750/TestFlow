@@ -190,8 +190,17 @@ jobs:
       - name: 打包预览版
         shell: pwsh
         run: |
-          dotnet pack "${{ matrix.project }}" -c Release -o out `
-            -p:Version="${{ steps.ver.outputs.preview }}"
+          $ver = "${{ steps.ver.outputs.preview }}"
+          # 用 ::notice:: 把值带进 annotation（公开可读），失败时用 ::error:: 把原因带出来
+          Write-Host "::notice::预览版本号 = [$ver]"
+          $log = (dotnet pack "${{ matrix.project }}" -c Release -o out -p:Version="$ver" 2>&1 | Out-String)
+          $code = $LASTEXITCODE
+          Write-Host $log
+          if ($code -ne 0) {
+            $why = (($log -split "`n") | Where-Object { $_ -match 'error|错误|Invalid|NU\d{4}' } | Select-Object -First 4) -join '  //  '
+            Write-Host "::error::pack 失败 (exit $code)：$why"
+            exit $code
+          }
 
       - name: 推送
         shell: pwsh
