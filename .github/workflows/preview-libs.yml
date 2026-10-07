@@ -1,0 +1,172 @@
+# 预览发布：src/ 下的类库有变更时，自动发一个 -ci.{run_number} 预览版到 GitHub Packages。
+# 只发"变了的那几个"lib（含依赖传递：改了 A，引用了 A 的 B 也重发）。
+# exe 不在这里发 —— 见 release-exe.yml（手动指定项目 + 版本）。
+name: Preview libs
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'Directory.Build.props'
+      - 'Global.cs'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      libs: ${{ steps.scan.outputs.libs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # 需要完整历史才能 diff
+
+      - name: 找出变更的 lib
+        id: scan
+        shell: pwsh
+        run: |
+          $root = (Get-Location).Path
+          $before = "${{ github.event.before }}"
+          # 首次 push / force push 时 before 是全 0，退化成跟上一个提交比
+          if ($before -match '^0+$') { $before = "HEAD~1" }
+          $changed = @(git diff --name-only $before "${{ github.sha }}")
+
+          # src/ 下所有 lib：统一成"相对路径 + 正斜杠"，跨平台都能和 git diff 对上
+          $libs = @(Get-ChildItem src -Recurse -Filter *.csproj |
+                    ForEach-Object { [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/') })
+
+          # 公共文件动了 → 所有 lib 的产物都会变，全部重发
+          $shared = @('Directory.Build.props', 'Global.cs')
+
+          # ① 变更文件落在哪个项目目录里，就算哪个项目变了
+          $hit = if ($changed | Where-Object { $shared -contains $_ }) {
+            $libs
+          } else {
+            @($libs | Where-Object {
+                $dir = Split-Path $_
+                $changed | Where-Object { $_ -like "$dir/*" } })
+          }
+
+          # ② 依赖闭包：改了 A，引用了 A 的项目也要重发
+          $more = $true
+          while ($more) {
+            $add = @()
+            foreach ($p in $libs) {
+              if ($hit -contains $p) { continue }
+              $refs = Select-String -Path $p -Pattern 'ProjectReference Include="([^"]+)"' -AllMatches
+              foreach ($m in $refs.Matches) {
+                $refAbs = [IO.Path]::GetFullPath((Join-Path (Split-Path $p) $m.Groups[1].Value))
+                $refRel = [IO.Path]::GetRelativePath($root, $refAbs).Replace('\', '/')
+                if ($hit -contains $refRel) { $add += $p }
+              }
+            }
+            if ($add.Count -eq 0) { $more = $false } else { $hit = @($hit + $add | Select-Object -Unique) }
+          }
+
+          $json = ConvertTo-Json -InputObject @($hit) -Compress
+          Write-Host "changed files: $($changed -join ', ')"
+          Write-Host "changed libs: $json"
+          "libs=$json" >> $env:GITHUB_OUTPUT
+
+  publish:
+    needs: detect
+    if: needs.detect.outputs.libs != '[]' && needs.detect.outputs.libs != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.detect.outputs.libs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 登录 GitHub Packages
+        shell: pwsh
+        run: |
+          dotnet nuget add source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" `
+            --name github --username "${{ github.actor }}" `
+            --password "${{ secrets.GITHUB_TOKEN }}" --store-password-in-clear-text
+
+      - name: 用 dotnet pack 的包校验判定 API 变化 → 算预览版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $proj = "${{ matrix.project }}"
+          $n    = "${{ github.run_number }}"
+
+          # 基线版本 = 项目里 <Version> 写的那个（剥掉 -pre / +meta）
+          $base = (dotnet msbuild $proj -getProperty:Version | ConvertFrom-Json).Properties.Version
+          $base = $base.Split('-')[0].Split('+')[0]
+          $seg   = $base.Split('.')
+          $major = [int]$seg[0]
+          $minor = [int]$seg[1]
+          $patch = if ($seg.Count -gt 2) { [int]$seg[2] } else { 0 }
+          Write-Host "baseline=$base"
+
+          $probe = Join-Path $env:RUNNER_TEMP 'pack-probe'
+          New-Item -ItemType Directory -Path $probe -Force | Out-Null
+
+          # 从日志里抠诊断码，排除 CP0003（"程序集版本不一致"——预览号的 AssemblyVersion
+          # 必然和基线不同，它每次都会出现，不是 API 变化）
+          $grab = { param($t)
+            ([regex]::Matches($t, 'CP\d{4}|PKV\d{4}') |
+              ForEach-Object { $_.Value } |
+              Where-Object { $_ -ne 'CP0003' } |
+              Select-Object -Unique) -join ',' }
+
+          # ① 默认模式（只报不兼容）。SDK 会自己去源上取 baseline 包。
+          $log1 = (dotnet pack $proj -c Release -o "$probe/a" `
+                    -p:Version="$base-ci.$n" `
+                    -p:EnablePackageValidation=true `
+                    -p:PackageValidationBaselineVersion="$base" 2>&1 | Out-String)
+          Write-Host "===== 默认模式 (exit $LASTEXITCODE) ====="
+          Write-Host $log1
+          $defCodes = & $grab $log1
+
+          # ② 默认模式干净时，才需要严格模式（它连"新增"这种兼容变更也报）
+          $kind = 'none'
+          if ($defCodes) {
+            $kind = 'breaking'
+          } else {
+            $log2 = (dotnet pack $proj -c Release -o "$probe/b" `
+                      -p:Version="$base-ci.$n" `
+                      -p:EnablePackageValidation=true `
+                      -p:PackageValidationBaselineVersion="$base" `
+                      -p:EnableStrictModeForBaselineValidation=true 2>&1 | Out-String)
+            Write-Host "===== 严格模式 (exit $LASTEXITCODE) ====="
+            Write-Host $log2
+            if (& $grab $log2) { $kind = 'additive' }
+          }
+          # 说明：baseline 版本还没发布过时，pack 会因找不到那个包而失败，
+          #       但日志里没有 CP/PKV 诊断码 → 两个分支都不成立 → $kind 仍是 'none'
+
+          # ③ 算预览版本号（基线 X.Y.Z）
+          #    破坏：X=0 → 涨 Y（0.(Y+1).0）；X>0 → 涨 X（(X+1).0.0）
+          #    新增：X=0 → 涨 Z（X.Y.(Z+1)）；X>0 → 涨 Y（X.(Y+1).0）
+          #    无变化：X=0 或 X>0 都涨 Z（X.Y.(Z+1)）
+          $core = switch ($kind) {
+            'breaking' { if ($major -eq 0) { "0.$($minor + 1).0" } else { "$($major + 1).0.0" } }
+            'additive' { if ($major -eq 0) { "$major.$minor.$($patch + 1)" } else { "$major.$($minor + 1).0" } }
+            default    { "$major.$minor.$($patch + 1)" }
+          }
+          $preview = "$core-ci.$n"
+          Write-Host "API 变化=$kind  →  预览版本=$preview"
+          "preview=$preview" >> $env:GITHUB_OUTPUT
+
+      - name: 打包预览版
+        shell: pwsh
+        run: |
+          dotnet pack "${{ matrix.project }}" -c Release -o out `
+            -p:Version="${{ steps.ver.outputs.preview }}"
+
+      - name: 推送
+        shell: pwsh
+        run: |
+          dotnet nuget push "out/*.nupkg" --source github `
+            --api-key "${{ secrets.GITHUB_TOKEN }}" --skip-duplicate

@@ -1,0 +1,102 @@
+# exe 发版：不自动、不走语义化版本。你在 Actions 页点 [Run workflow]，
+# 指定要发的项目（可多个，逗号分隔；留空=全部 exe）和版本号。
+name: Release exe
+
+on:
+  workflow_dispatch:
+    inputs:
+      projects:
+        description: '要发布的 exe，逗号分隔的 csproj 路径（留空 = 全部 exe）'
+        required: false
+        type: string
+      version:
+        description: '版本号，例如 1.0.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      exes: ${{ steps.pick.outputs.exes }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 决定发哪几个 exe
+        id: pick
+        shell: pwsh
+        run: |
+          $userPick = "${{ inputs.projects }}".Trim()
+          if ($userPick) {
+            # ① 你手填的
+            $list = @($userPick.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          } else {
+            # ② 留空 → 问 MSBuild 谁是可执行的（比读 csproj 文本靠谱）
+            $root = (Get-Location).Path
+            $list = @()
+            $cands = @(Get-ChildItem src, samples -Recurse -Filter *.csproj -ErrorAction SilentlyContinue)
+            foreach ($p in $cands) {
+              $o = dotnet msbuild $p.FullName -getProperty:OutputType | ConvertFrom-Json
+              if ($o.Properties.OutputType -in @('Exe', 'WinExe')) {
+                $list += [IO.Path]::GetRelativePath($root, $p.FullName).Replace('\', '/')
+              }
+            }
+          }
+          $json = ConvertTo-Json -InputObject @($list) -Compress
+          Write-Host "exes: $json"
+          "exes=$json" >> $env:GITHUB_OUTPUT
+
+  publish:
+    needs: resolve
+    if: needs.resolve.outputs.exes != '[]' && needs.resolve.outputs.exes != ''
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.resolve.outputs.exes) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 发布
+        shell: pwsh
+        run: |
+          $name = [IO.Path]::GetFileNameWithoutExtension("${{ matrix.project }}")
+          dotnet publish "${{ matrix.project }}" -c Release `
+            -p:Version="${{ inputs.version }}" `
+            -o "publish/$name"
+
+      - name: 压缩
+        shell: pwsh
+        run: |
+          $name = [IO.Path]::GetFileNameWithoutExtension("${{ matrix.project }}")
+          Compress-Archive -Path "publish/$name/*" -DestinationPath "publish/$name.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exe-${{ strategy.job-index }}
+          path: publish/*.zip
+
+  release:
+    needs: [resolve, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: 'exe-*'
+          merge-multiple: true
+          path: publish
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: v${{ inputs.version }}
+          files: publish/*.zip
+          draft: true            # 草稿，你自己确认后再 Publish
