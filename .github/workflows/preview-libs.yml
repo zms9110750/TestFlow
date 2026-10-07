@@ -108,7 +108,10 @@ jobs:
           $wf = '.github/workflows/preview-libs.yml'
           $fileDate = (git log -1 --format=%cs -- $wf | Out-String).Trim()
           if ($fileDate -notmatch '^\d{4}-\d{2}-\d{2}$') { throw "拿不到 $wf 的最后提交日期：$fileDate" }
-          $fileDate = $fileDate.Replace('-', '.')
+          # 去掉前导零：SemVer 硬规则"纯数字的预发布标识符不允许前导零"——
+          # ci.2026.10.08 会在 pack 时直接失败（08 非法），ci.2026.10.8 才合法。
+          # 排序不受影响：NuGet 对纯数字段按数字比较（10 > 9）。
+          $fileDate = ($fileDate -split '-' | ForEach-Object { [string][int]$_ }) -join '.'
           Write-Host "workflow file date = $fileDate"
 
           # GH Actions 的 pwsh 默认 $ErrorActionPreference=stop，会把 dotnet 写到 stderr 的
